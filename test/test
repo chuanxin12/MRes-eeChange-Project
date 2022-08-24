@@ -1,0 +1,137 @@
+from pyrealm import pmodel
+import pyreadr
+import netCDF4 as nc
+import numpy as np
+import pandas as pd
+from netCDF4 import Dataset 
+
+from pyrealm.pmodel import calc_patm
+from pyrealm.utilities import convert_sh_to_vpd
+
+#2006-2020 vpd from tmp,p,spfh
+#一 tmp,p,spfh处理
+# 1 tmp  # unit： °C 1分钟
+
+tmp= nc.Dataset("Z:/home/CXdata/CRU/1tmp/10whole/change_attribute_celsius/CRUJRA_noon_tmp_15mean.2017_real.nc") #-1 
+self_tmp = tmp.variables['tmp']
+tmp_monthly = self_tmp[:,:,:] 
+tmp_monthly = np.asarray(tmp_monthly)
+tmp_monthly [tmp_monthly ==1.0000000200408773e+20] =np.nan 
+print(tmp_monthly [0,0])
+tmp_monthly [tmp_monthly < -25] =np.nan  # 把小于-25的去掉
+print(tmp_monthly .shape)
+print(np.nanmin(tmp_monthly))  #-24.9  
+print(np.nanmax(tmp_monthly))  #47
+print(tmp_monthly.shape)
+
+#2 pres 25s
+patm =nc.Dataset("Z:/home/CXdata/CRU/4pressure/2remappa/pa_noonpres/CRUJRA_noon_pres_15mean.2017_real.nc") #-2   # unit: Pa 
+
+self_patm = patm.variables['pres']
+self_patm = self_patm[:,:,:]
+self_patm.shape 
+
+self_patm = np.asarray(self_patm) 
+print(self_patm[0,0])
+self_patm[self_patm ==9.969209968386867e+36] =np.nan
+print(self_patm[0,0])
+print(np.nanmin(self_patm))  # 51636.29
+print(np.nanmax(self_patm)) #104061.27   
+print(self_patm.shape)
+p =self_patm/1000  # convert pa to kpa used in calculating vpd 
+
+#3
+spfh = nc.Dataset("Z:/home/CXdata/CRU/2spfh/3noon_data/CRUJRA_noon_spfh_15mean.2017_real.nc")#-3
+self_spfh= spfh.variables['spfh']
+spfh_sixhourly = self_spfh[:,:,:]
+spfh_sixhourly.shape  #(12, 180, 360)
+
+spfh_sixhourly = np.asarray(spfh_sixhourly) 
+print(spfh_sixhourly[0,0])
+spfh_sixhourly[spfh_sixhourly ==9.969209968386867e+36] =np.nan
+print(spfh_sixhourly[0,0])
+print(np.nanmin(spfh_sixhourly)) #0.0  
+print(np.nanmax(spfh_sixhourly)) #0.025878621    0.022563912  #0.02297
+print(spfh_sixhourly.shape)
+
+
+from pyrealm.param_classes import HygroParams  
+allen = HygroParams(magnus_option='Allen1998')
+self_vpd = convert_sh_to_vpd(sh=spfh_sixhourly,ta=tmp_monthly,patm=p,hygro_params=allen) # patm = p in unit:kpa
+print(np.nanmin(self_vpd)) #-0.7482754150673216
+print(np.nanmax(self_vpd))   #9.23
+
+self_vpd[self_vpd < 0] = 0 
+print(np.nanmin(self_vpd)) #0.0
+self_vpd.shape  #(12, 180, 360)
+self_vpd =self_vpd*1000 #from kpa to pa
+print(np.nanmin(self_vpd)) #0.0
+print(np.nanmax(self_vpd)) #9230.6noon     3302dailymean
+self_vpd[self_vpd >10000] = 10000
+
+
+
+#二 储存 ppfd
+old_NC = nc.Dataset('Z:/home/CXdata/CRU/5tswrf/360180_noon_tswrf/CRUJRA_noon_tswrf_15mean.2006_real.nc')#07,是365 180 360，06是350
+# 获取维度的值，一般有时间、等级、经纬度
+time = old_NC.variables['time'][:].data
+#level = old_NC.variables['level'][:].data
+lat = old_NC.variables['lat'][:].data
+lon = old_NC.variables['lon'][:].data
+
+# 以下为写入数据                # 4
+new_NC = nc.Dataset('noon_vpd_15mean.2017_real.nc', 'w', format='NETCDF4')# sixhourlytmp2010.nc
+# 创建维度，createDimension（维度名称，维度长度）
+new_NC.createDimension('time',len(time))
+#new_NC.createDimension('level', len(level))
+new_NC.createDimension('lat', len(lat))
+new_NC.createDimension('lon', len(lon))
+
+# 创建变量，createVariable（变量名，值类型，shape）
+# shape里面用上面创建的维度来约束，维度也是一种变量，一般是一维的
+new_NC.createVariable("time", np.float32, ("time"))# ("time")表示维度由刚刚创建的'time'维度来约束
+    
+new_NC.createVariable("lat", np.float32, ("lat"))
+new_NC.createVariable("lon", np.float32, ("lon"))
+
+# 创建变量，tmp_sixhourly变量为四维数组，维度分别为时间、等级、经纬度
+new_NC.createVariable("vpd", np.float32, ("time",  "lat", "lon"))
+
+# 给维度填充数据# 偷懒，用刚刚读出的数据来填充# 相当于给数轴表上刻度
+new_NC.variables['time'][:] = time
+new_NC.variables['lat'][:] = lat
+new_NC.variables['lon'][:] = lon
+
+# 给变量填充数据
+new_NC.variables['vpd'][:] = self_vpd
+# 关闭文件
+new_NC.close()
+
+
+
+#3 检查输出的nc文件
+tswrf =  nc.Dataset("noon_vpd_15mean.2017_real.nc") #5    
+print(tswrf)
+tswrf = tswrf.variables['vpd'] 
+tswrf_daily = tswrf[:,:,:] 
+tswrf_daily.shape  # (12, 180, 360)
+tswrf_daily = np.asarray(tswrf_daily)
+tswrf_daily = np.asarray(tswrf_daily)
+print(tswrf_daily[0,0])
+print(np.nanmin(tswrf_daily))  # 0
+print(np.nanmax(tswrf_daily))  # 1955 
+
+#，，，17-10418,
+#18-9931，16-9885，15-9653，14-9646，13-9695,2012-9605，11-9326，10-9781，09-9243,08 -9391，07- 9036,
+#17和19和20 vpd都有大于10000这种情况
+
+tswrf =  nc.Dataset("noon_vpd_15mean.2018_real8.nc") #5    
+print(tswrf)
+tswrf = tswrf.variables['vpd'] 
+tswrf_daily = tswrf[:,:,:] 
+tswrf_daily.shape  # (12, 180, 360)
+tswrf_daily = np.asarray(tswrf_daily)
+tswrf_daily = np.asarray(tswrf_daily)
+print(tswrf_daily[0,0])
+print(np.nanmin(tswrf_daily))  # 0
+print(np.nanmax(tswrf_daily))  # 1955 
